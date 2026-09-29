@@ -1,0 +1,2050 @@
+openapi: 3.1.0
+info:
+  title: DOGFOOD Platform API
+  version: 1.0.0
+  description: >-
+    HTTP API exposed by this checkout, including /api/v1, operational probes, and
+    the public gallery embed, and the judge-record trust anchor under /.well-known. Session-authenticated operations use the
+    dogfood_session cookie. Error responses use the shared error envelope.
+servers:
+  - url: /
+    description: Same-origin application server
+security:
+  - sessionCookie: []
+tags:
+  - name: Auth
+  - name: Operations
+  - name: Events
+  - name: Gallery
+  - name: Teams and projects
+  - name: Judging
+  - name: Voting
+  - name: Prizes and certificates
+  - name: Assets and exports
+  - name: Webhooks
+paths:
+  /api/v1/auth/register:
+    post:
+      operationId: registerAccount
+      tags: [Auth]
+      summary: Register an account and start a session
+      description: Creates an account through the shared auth service and sets HttpOnly dogfood_session and dogfood_accounts cookies. The response never returns the raw session token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterAccount' }
+      responses:
+        '201':
+          description: Account created and session cookies set
+          headers:
+            Set-Cookie: { schema: { type: string }, description: Sets the active session and saved account list as HttpOnly, SameSite=Lax cookies. Secure is added in production. }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthUserResponse' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/auth/login:
+    post:
+      operationId: loginAccount
+      tags: [Auth]
+      summary: Log in and start a session
+      description: Authenticates credentials through the shared auth service and sets HttpOnly dogfood_session and dogfood_accounts cookies. Invalid credentials use one generic error. The response never returns the raw session token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginAccount' }
+      responses:
+        '200':
+          description: Authenticated and session cookies set
+          headers:
+            Set-Cookie: { schema: { type: string }, description: Sets the active session and saved account list as HttpOnly, SameSite=Lax cookies. Secure is added in production. }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthUserResponse' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/auth/logout:
+    post:
+      operationId: logoutAccount
+      tags: [Auth]
+      summary: Clear the active browser session
+      description: Matches the UI sign-out action by clearing dogfood_session while retaining saved account sessions in dogfood_accounts. The server-side session is retained for account switching.
+      security: []
+      responses:
+        '200':
+          description: Active browser session cleared
+          headers:
+            Set-Cookie: { schema: { type: string }, description: Expires dogfood_session immediately. }
+          content:
+            application/json:
+              schema: { type: object, required: [signedOut], properties: { signedOut: { const: true } } }
+  /api/v1/auth/switch:
+    post:
+      operationId: switchAccount
+      tags: [Auth]
+      summary: Switch to a saved account session
+      description: Accepts a session token only when it is present in the browser's HttpOnly dogfood_accounts list and still resolves to an active account. The token is never returned in JSON.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SwitchAccount' }
+      responses:
+        '200':
+          description: Active session switched
+          headers:
+            Set-Cookie: { schema: { type: string }, description: Sets the selected saved session as dogfood_session. }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user]
+                properties:
+                  user: { $ref: '#/components/schemas/AuthUser' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /embed/gallery:
+    get:
+      operationId: getEmbeddableGallery
+      tags: [Gallery]
+      summary: Serve the public iframe gallery
+      description: Read-only HTML widget. It uses the same q, event, track, and tag filters as the anonymous gallery API and allows framing by external sites.
+      security: []
+      parameters:
+        - { in: query, name: q, schema: { type: string, maxLength: 100 } }
+        - { in: query, name: event, schema: { type: string, format: uuid } }
+        - { in: query, name: track, schema: { type: string, format: uuid } }
+        - { in: query, name: tag, schema: { type: string, maxLength: 40 } }
+      responses:
+        '200':
+          description: Standalone responsive iframe widget
+          content:
+            text/html:
+              schema: { type: string }
+          headers:
+            Content-Security-Policy:
+              schema: { type: string }
+              description: Includes frame-ancestors * and restricts scripts, styles, images, and API calls to this origin.
+        '400':
+          description: Invalid gallery filter
+          content:
+            text/plain: { schema: { type: string } }
+  /api/v1/events:
+    get:
+      operationId: listEvents
+      tags: [Events]
+      summary: List visible events
+      security: [{}, { sessionCookie: [] }]
+      parameters:
+        - { in: query, name: q, schema: { type: string, maxLength: 100 } }
+        - { in: query, name: state, schema: { type: string, enum: [DRAFT, REGISTRATION, SUBMISSIONS_OPEN, SUBMISSIONS_CLOSED, JUDGING, RESULTS_READY, PUBLISHED, ARCHIVED] } }
+      responses:
+        '200':
+          description: Event list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/EventSummary' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: createEvent
+      tags: [Events]
+      summary: Create an event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateEvent' }
+      responses:
+        '201':
+          description: Created event
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event: { $ref: '#/components/schemas/EventSummary' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: getEvent
+      tags: [Events]
+      summary: Get event details and the current account roles
+      security: [{}, { sessionCookie: [] }]
+      responses:
+        '200':
+          description: Event detail, including registration windows and the current account roles.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event:
+                    allOf:
+                      - { $ref: '#/components/schemas/EventSummary' }
+                      - type: object
+                        required: [myRoles, registrationOpensAt, registrationClosesAt]
+                        properties:
+                          myRoles: { type: array, items: { type: string } }
+                          registrationOpensAt: { type: [string, 'null'], format: date-time }
+                          registrationClosesAt: { type: [string, 'null'], format: date-time }
+        default: { $ref: '#/components/responses/ApiError' }
+    put:
+      operationId: updateEventDetails
+      tags: [Events]
+      summary: Replace organizer-managed event details
+      description: All detail fields are required; use null to clear nullable fields. Only event organizers with configure permission may update details.
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateEventDetails' }
+      responses:
+        '200':
+          description: Updated event details
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event:
+                    allOf:
+                      - { $ref: '#/components/schemas/EventSummary' }
+                      - { $ref: '#/components/schemas/UpdateEventDetails' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/registration-window:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    put:
+      operationId: updateEventRegistrationWindow
+      tags: [Events]
+      summary: Replace an event's registration window
+      description: Requires an authenticated event organizer with configure permission. Both nullable timestamps are required; send null to clear a bound. The open time must be earlier than the close time when both are set.
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [registrationOpensAt, registrationClosesAt]
+              properties:
+                registrationOpensAt: { type: [string, 'null'], format: date-time }
+                registrationClosesAt: { type: [string, 'null'], format: date-time }
+      responses:
+        '200':
+          description: Updated event and registration window
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event:
+                    allOf:
+                      - { $ref: '#/components/schemas/EventSummary' }
+                      - type: object
+                        required: [registrationOpensAt, registrationClosesAt]
+                        properties:
+                          registrationOpensAt: { type: [string, 'null'], format: date-time }
+                          registrationClosesAt: { type: [string, 'null'], format: date-time }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/transition:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: transitionEvent
+      tags: [Events]
+      summary: Advance an event through the lifecycle
+      description: Requires an authenticated event organizer with transition permission. The event service validates allowed state transitions and records the audit event and notifications.
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toState]
+              properties:
+                toState: { type: string, enum: [DRAFT, REGISTRATION, SUBMISSIONS_OPEN, SUBMISSIONS_CLOSED, JUDGING, RESULTS_READY, PUBLISHED, ARCHIVED] }
+      responses:
+        '200':
+          description: Updated event
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event: { $ref: '#/components/schemas/EventSummary' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/join:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: joinEvent
+      tags: [Events]
+      summary: Join an event as a participant
+      description: Requires an authenticated account and open event registration. Uses the event membership service, including the existing registration window, permission, and audit behavior. Repeating a join for an existing participant is idempotent.
+      responses:
+        '200':
+          description: Participant membership created or already present
+          content:
+            application/json:
+              schema: { type: object, required: [membership], properties: { membership: { $ref: '#/components/schemas/EventMembership' } } }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/members:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: addEventMember
+      tags: [Events]
+      summary: Add an event judge or organizer by email
+      description: Requires an authenticated organizer with member-invite permission. Participants join through the event page. Membership grants use the existing service, audit log, and notifications.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddEventMember' }
+      responses:
+        '201':
+          description: Member added or existing membership updated
+          content:
+            application/json:
+              schema: { type: object, required: [membership], properties: { membership: { $ref: '#/components/schemas/EventMembership' } } }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/members/{userId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: changeEventMemberRole
+      tags: [Events]
+      summary: Change an event member role
+      description: Requires an authenticated organizer with member-invite permission. Uses the existing membership grant service, including conflict checks, audit logging, and notifications.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangeEventMemberRole' }
+      responses:
+        '200':
+          description: Updated membership
+          content:
+            application/json:
+              schema: { type: object, required: [membership], properties: { membership: { $ref: '#/components/schemas/EventMembership' } } }
+        default: { $ref: '#/components/responses/ApiError' }
+    delete:
+      operationId: removeEventMember
+      tags: [Events]
+      summary: Remove an event member
+      description: Requires an authenticated organizer with member-remove permission. The existing service prevents removal of the last organizer and records the audit event and notification.
+      responses:
+        '200':
+          description: Member removed
+          content:
+            application/json:
+              schema: { type: object, required: [removed], properties: { removed: { const: true } } }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/gallery:
+    get:
+      operationId: listGallery
+      tags: [Gallery]
+      summary: Search public gallery projects
+      description: Anonymous; excludes draft/private projects and redacts private answers.
+      security: []
+      parameters:
+        - { in: query, name: q, schema: { type: string, maxLength: 100 } }
+        - { in: query, name: event, schema: { type: string, format: uuid } }
+        - { in: query, name: track, schema: { type: string, format: uuid } }
+        - { in: query, name: tag, schema: { type: string, maxLength: 40 } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/gallery:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listEventGallery
+      tags: [Gallery]
+      summary: Search public projects in one event
+      description: Uses the same q, track, and tag filters as the global public gallery.
+      security: []
+      parameters:
+        - { in: query, name: q, schema: { type: string, maxLength: 100 } }
+        - { in: query, name: track, schema: { type: string, format: uuid } }
+        - { in: query, name: tag, schema: { type: string, maxLength: 40 } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/gallery/{projectId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { $ref: '#/components/parameters/projectId' }
+    get:
+      operationId: getGalleryProject
+      tags: [Gallery]
+      summary: Get one publicly visible gallery project
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/teams:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: createTeam
+      tags: [Teams and projects]
+      summary: Create a team
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 80 } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/teams/join:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: joinTeam
+      tags: [Teams and projects]
+      summary: Join a team using an invitation code
+      description: Requires an authenticated account and a valid invitation code for a team in this event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [inviteCode], properties: { inviteCode: { type: string, minLength: 4, maxLength: 32 } } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/teams/{teamId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: teamId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getTeam
+      tags: [Teams and projects]
+      summary: Read a team in the event
+      description: Requires an authenticated account with access to the team. A team outside the event is returned as not found.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/teams/{teamId}/invitations:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: teamId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: createTeamInvitation
+      tags: [Teams and projects]
+      summary: Create an invitation for a team
+      description: Requires team invitation permission. Returns the raw invitation code once; the team must belong to the event.
+      responses:
+        '201':
+          description: Invitation code created
+          content:
+            application/json:
+              schema: { type: object, required: [inviteCode], properties: { inviteCode: { type: string } } }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/teams/{teamId}/leave:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: teamId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: leaveTeam
+      tags: [Teams and projects]
+      summary: Leave a team
+      description: Requires an authenticated team member. A team outside the event is returned as not found.
+      responses:
+        '200':
+          description: Leave request accepted
+          content:
+            application/json:
+              schema: { type: object, required: [accepted], properties: { accepted: { const: true } } }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/tracks:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listEventTracks
+      tags: [Events]
+      summary: List tracks for an event
+      description: Requires an authenticated account with event access.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: addEventTrack
+      tags: [Events]
+      summary: Add a track to an event
+      description: Requires event configuration permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 100 } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/tracks/{trackId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: trackId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: updateEventTrack
+      tags: [Events]
+      summary: Rename an event track
+      description: Requires event configuration permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 100 } } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    delete:
+      operationId: deleteEventTrack
+      tags: [Events]
+      summary: Delete an unused track
+      description: Requires event configure permission. Returns 409 when a project revision uses the track; remaining tracks are renumbered.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/tracks/{trackId}/order:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: trackId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: moveEventTrack
+      tags: [Events]
+      summary: Move a track up or down in the event order
+      description: Requires event configuration permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [direction], properties: { direction: { type: string, enum: [UP, DOWN] } } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/custom-questions:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listCustomQuestions
+      tags: [Events]
+      summary: List event custom questions
+      description: Requires an authenticated account with event access.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: addCustomQuestion
+      tags: [Events]
+      summary: Add a custom submission question
+      description: Requires event configuration permission. Visibility defaults to PUBLIC and required defaults to false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: { type: string, minLength: 1, maxLength: 300 }
+                required: { type: boolean, default: false }
+                visibility: { type: string, enum: [PUBLIC, ORGANIZER_ONLY] }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/custom-questions/{questionId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: questionId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: updateCustomQuestion
+      tags: [Events]
+      summary: Update a custom submission question
+      description: Requires event configuration permission; all question fields are required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt, required, visibility]
+              properties:
+                prompt: { type: string, minLength: 1, maxLength: 300 }
+                required: { type: boolean }
+                visibility: { type: string, enum: [PUBLIC, ORGANIZER_ONLY] }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    delete:
+      operationId: deleteCustomQuestion
+      tags: [Events]
+      summary: Delete a custom submission question
+      description: Requires event configure permission. Remaining questions are renumbered.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/custom-questions/{questionId}/order:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: questionId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: moveCustomQuestion
+      tags: [Events]
+      summary: Move a custom question up or down in the event order
+      description: Requires event configuration permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [direction], properties: { direction: { type: string, enum: [UP, DOWN] } } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/projects:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: createProject
+      tags: [Teams and projects]
+      summary: Create a project draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProject' }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/projects/{projectId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { $ref: '#/components/parameters/projectId' }
+    patch:
+      operationId: reviseProject
+      tags: [Teams and projects]
+      summary: Create a project revision
+      description: Requires a member of the project's team and an open submission window. `expectedCurrentRevisionId` prevents overwriting a revision created since the client last read the project.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedCurrentRevisionId, title, description]
+              properties:
+                expectedCurrentRevisionId: { type: string, format: uuid }
+                title: { type: string, maxLength: 120 }
+                tagline: { type: [string, 'null'], maxLength: 280 }
+                description: { type: string, maxLength: 4000 }
+                repositoryUrl: { type: [string, 'null'], format: uri }
+                liveUrl: { type: [string, 'null'], format: uri }
+                demoVideoUrl: { type: [string, 'null'], format: uri }
+                techTags: { type: array, maxItems: 20, items: { type: string, maxLength: 40 } }
+                trackId: { type: [string, 'null'], format: uuid }
+                thumbnailAssetId: { type: [string, 'null'], format: uuid }
+                imageAssetIds: { type: array, maxItems: 10, items: { type: string, format: uuid } }
+                customAnswers: { type: object, additionalProperties: { type: string, maxLength: 4000 } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/projects/{projectId}/submit:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { $ref: '#/components/parameters/projectId' }
+    post:
+      operationId: submitProject
+      tags: [Teams and projects]
+      summary: Submit the current project revision
+      description: Requires a member of the project's team, a complete current revision, and an open submission window.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/projects/{projectId}/withdraw:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { $ref: '#/components/parameters/projectId' }
+    post:
+      operationId: withdrawProject
+      tags: [Teams and projects]
+      summary: Withdraw a submitted project to draft
+      description: Requires a member of the project's team and an open submission window. Locked projects cannot be withdrawn.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/projects/{projectId}/lock:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { $ref: '#/components/parameters/projectId' }
+    post:
+      operationId: lockProject
+      tags: [Teams and projects]
+      summary: Lock one project against further changes
+      description: Requires event configure permission. This route locks one project; bulk project locking is not exposed here.
+      responses:
+        '200':
+          description: Project locked (or already locked)
+          content:
+            application/json:
+              schema: { type: object, required: [accepted], properties: { accepted: { const: true } } }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/assets:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: uploadProjectAsset
+      tags: [Assets and exports]
+      summary: Upload a project image asset
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { type: object, required: [file], properties: { file: { type: string, format: binary, description: PNG or JPEG image file } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/assets/{assetId}:
+    parameters:
+      - { name: assetId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getProjectAsset
+      tags: [Assets and exports]
+      summary: Read an uploaded image asset
+      description: Returns the asset bytes with its stored image MIME type.
+      security: [{}, { sessionCookie: [] }]
+      responses:
+        '200': { description: Image bytes, content: { image/png: { schema: { type: string, format: binary } }, image/jpeg: { schema: { type: string, format: binary } } } }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/evaluations/{assignmentId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: assignmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getEvaluation
+      tags: [Judging]
+      summary: Read an assigned evaluation
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    put:
+      operationId: saveEvaluationDraft
+      tags: [Judging]
+      summary: Save an evaluation draft
+      requestBody: { $ref: '#/components/requestBodies/Evaluation' }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: submitEvaluation
+      tags: [Judging]
+      summary: Submit an evaluation
+      requestBody: { $ref: '#/components/requestBodies/Evaluation' }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-queue:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: getJudgeQueue
+      tags: [Judging]
+      summary: List the current judge's queue
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-assignments:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listJudgeAssignments
+      tags: [Judging]
+      summary: List assignments visible to this account
+      parameters:
+        - { in: query, name: judgeId, schema: { type: string, format: uuid } }
+        - { in: query, name: projectId, schema: { type: string, format: uuid } }
+        - { in: query, name: trackId, schema: { type: string, format: uuid } }
+        - { in: query, name: status, schema: { type: string, enum: [ASSIGNED, IN_PROGRESS, SUBMITTED, LOCKED] } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: assignJudge
+      tags: [Judging]
+      summary: Assign one or more judge-project pairs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - { type: object, required: [judgeId, projectId], properties: { judgeId: { type: string, format: uuid }, projectId: { type: string, format: uuid } } }
+                - { type: object, required: [assignments], properties: { assignments: { type: array, minItems: 1, maxItems: 500, items: { type: object, required: [judgeId, projectId], properties: { judgeId: { type: string, format: uuid }, projectId: { type: string, format: uuid } } } } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-assignments/generate:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: generateJudgeAssignmentProposal
+      tags: [Judging]
+      summary: Preview or commit a generated assignment proposal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignmentGeneration' }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-assignments/{assignmentId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: assignmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: unassignJudge
+      tags: [Judging]
+      summary: Remove an assignment
+      responses:
+        '204': { description: Assignment removed }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-recusals:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listJudgeRecusals
+      tags: [Judging]
+      summary: List event recusals
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: createJudgeRecusal
+      tags: [Judging]
+      summary: Record a judge-project recusal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [judgeId, projectId, reason], properties: { judgeId: { type: string, format: uuid }, projectId: { type: string, format: uuid }, reason: { type: string, minLength: 1, maxLength: 1000 } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-recusals/{recusalId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: recusalId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: deleteJudgeRecusal
+      tags: [Judging]
+      summary: Remove a recusal
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-invitations:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listJudgeInvitations
+      tags: [Judging]
+      summary: List judge invitations
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: createJudgeInvitation
+      tags: [Judging]
+      summary: Create a judge invitation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [email], properties: { email: { type: string, format: email, maxLength: 320 } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-invitations/accept:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: acceptJudgeInvitation
+      tags: [Judging]
+      summary: Accept an invitation for the signed-in account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [token], properties: { token: { type: string, minLength: 32, maxLength: 128 } } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-invitations/{invitationId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: revokeJudgeInvitation
+      tags: [Judging]
+      summary: Revoke a judge invitation
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/rankings:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listRankingSnapshots
+      tags: [Judging]
+      summary: List ranking snapshots for organizers
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: generateRanking
+      tags: [Judging]
+      summary: Generate a ranking snapshot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { normalizationStrategy: { type: string, enum: [z-score, none], default: z-score }, minimumBatchSize: { type: integer, minimum: 0, maximum: 1000, default: 1 }, tieBreakers: { type: array, maxItems: 8, items: { type: string, enum: [secondary-score, project-id] }, default: [secondary-score, project-id] } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/results:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: getPublishedResults
+      tags: [Judging]
+      summary: Read the latest published ranking
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-records:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listPublicJudgeRecords
+      tags: [Judging]
+      summary: List published judge participation records
+      description: Publicly reads immutable issued records for this event. Each record reports signature validity separately from issuer trust. Issuer trust requires its SHA-256 SPKI fingerprint to match the deployment's JUDGE_RECORD_TRUSTED_KEY_FINGERPRINTS.
+      security: []
+      responses:
+        '200':
+          description: Published signed Ed25519 participation records
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [records]
+                properties:
+                  records:
+                    type: array
+                    items: { $ref: '#/components/schemas/SignedJudgeRecord' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: managePublicJudgeRecords
+      tags: [Judging]
+      summary: Issue, reissue, or revoke judge participation records
+      description: Requires an authenticated event organizer and JUDGE_RECORD_SIGNING_PRIVATE_KEY containing an Ed25519 PKCS#8 PEM. Reissue creates a linked immutable issuance and signed revocation receipt for its predecessor.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [action]
+                  properties:
+                    action: { const: issue }
+                - type: object
+                  required: [action, judgeId]
+                  properties:
+                    action: { const: reissue }
+                    judgeId: { type: string, format: uuid }
+                - type: object
+                  required: [action, recordId, reason]
+                  properties:
+                    action: { const: revoke }
+                    recordId: { type: string, format: uuid }
+                    reason: { type: string, minLength: 3, maxLength: 500 }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        '201': { $ref: '#/components/responses/JsonObject' }
+        '403': { $ref: '#/components/responses/ApiError' }
+        '404': { $ref: '#/components/responses/ApiError' }
+        '409': { $ref: '#/components/responses/ApiError' }
+        '503': { description: Judge record signing is not configured }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/judge-records/{recordId}:
+    parameters:
+      - { name: recordId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: verifyPublicJudgeParticipationRecord
+      tags: [Judging]
+      summary: Check a public judge record's current status
+      description: Publicly verifies the stored signature and reports issuer trust against the deployment's independent fingerprint pins. A revoked record returns its signed revocation receipt without the original payload.
+      security: []
+      responses:
+        '200':
+          description: Active signed record and current issuer trust status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, record, trustStatus]
+                properties:
+                  status: { const: published }
+                  record: { $ref: '#/components/schemas/SignedJudgeRecord' }
+                  trustStatus: { type: string, enum: [trusted, untrusted-key] }
+        '410':
+          description: Record was revoked; includes a signed receipt without the revoked payload
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, revocationReceipt, trustStatus]
+                properties:
+                  status: { const: revoked }
+                  revocationReceipt: { $ref: '#/components/schemas/SignedJudgeRecordRevocationReceipt' }
+                  trustStatus: { type: string, enum: [trusted, untrusted-key] }
+        '404': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/pairwise-ranking:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: getPairwiseRankingSnapshot
+      tags: [Judging]
+      summary: Read a persisted pairwise ranking snapshot
+      description: Requires an authenticated event organizer. Unpublished snapshots are organizer-only.
+      parameters:
+        - { in: query, name: snapshotId, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: generatePairwiseRankingSnapshot
+      tags: [Judging]
+      summary: Generate and persist a pairwise ranking snapshot
+      description: Requires an authenticated event organizer. Uses the judges' latest saved pairwise choices; projectIds optionally limits the snapshot. The generated snapshot is immutable.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                projectIds: { type: array, minItems: 2, maxItems: 500, items: { type: string, format: uuid } }
+                maxIterations: { type: integer, minimum: 1, maximum: 100000 }
+                tolerance: { type: number, exclusiveMinimum: 0, maximum: 0.01 }
+                priorWins: { type: number, exclusiveMinimum: 0, maximum: 10 }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/pairwise-ranking/{snapshotId}/publish:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: snapshotId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: publishPairwiseRankingSnapshot
+      tags: [Judging]
+      summary: Publish a pairwise ranking snapshot as event results
+      description: Requires an authenticated event organizer with results-publish permission.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/pairwise-results:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: getPublishedPairwiseResults
+      tags: [Judging]
+      summary: Read the latest published pairwise ranking
+      description: Public endpoint. Returns the latest published pairwise snapshot or not found when none has been published.
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/pairwise-comparisons:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listPairwiseComparisons
+      tags: [Judging]
+      summary: Read the judge's assigned project pairs and saved choices
+      description: Requires a judge session. Projects are constrained to assignments and track scope. Saved choices contain the judge's latest winner for each pair.
+      responses:
+        '200':
+          description: Assigned projects and saved pairwise choices
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [projects, comparisons]
+                properties:
+                  projects:
+                    type: array
+                    items: { type: object, required: [id, title], properties: { id: { type: string, format: uuid }, title: { type: string } } }
+                  comparisons:
+                    type: array
+                    items: { $ref: '#/components/schemas/PairwiseChoice' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: savePairwiseComparison
+      tags: [Judging]
+      summary: Save or replace the winner for an assigned project pair
+      description: Requires a judge session and JUDGING event state. Both projects must be assigned to this judge and pass track-scope checks.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PairwiseChoice' }
+      responses:
+        '200':
+          description: Saved pairwise choice
+          content:
+            application/json:
+              schema: { type: object, required: [comparison], properties: { comparison: { $ref: '#/components/schemas/PairwiseChoice' } } }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/voting/config:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: getVotingConfig
+      tags: [Voting]
+      summary: Read voting window configuration
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    put:
+      operationId: updateVotingConfig
+      tags: [Voting]
+      summary: Set the voting open and close times
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [opensAt, closesAt], properties: { opensAt: { type: [string, 'null'], format: date-time }, closesAt: { type: [string, 'null'], format: date-time } } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/voting/ballot:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: getVotingBallot
+      tags: [Voting]
+      summary: Get the authenticated account ballot
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/voting/results:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: getVotingResults
+      tags: [Voting]
+      summary: Read community vote results subject to privacy rules
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/voting/audit:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: getVotingAudit
+      tags: [Voting]
+      summary: Read voting-related audit events
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/voting/invitations:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listVotingInvitations
+      tags: [Voting]
+      summary: List voting invitations
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: createVotingInvitation
+      tags: [Voting]
+      summary: Create a voting invitation
+      description: Returns a one-time invitation token in the creation response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [email], properties: { email: { type: string, minLength: 1, maxLength: 320 } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/voting/invitations/{invitationId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: revokeVotingInvitation
+      tags: [Voting]
+      summary: Revoke a voting invitation
+      responses:
+        '204': { description: Invitation revoked }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/votes:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: castVote
+      tags: [Voting]
+      summary: Cast an authenticated account vote
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [projectId], properties: { projectId: { type: string, format: uuid } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/projects/{projectId}/comments:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { $ref: '#/components/parameters/projectId' }
+    get:
+      operationId: listProjectComments
+      tags: [Voting]
+      summary: List comments for a project
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: createProjectComment
+      tags: [Voting]
+      summary: Add an authenticated account comment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [body], properties: { body: { type: string, minLength: 1, maxLength: 2000 } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/projects/{projectId}/comments/{commentId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { $ref: '#/components/parameters/projectId' }
+      - { name: commentId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: deleteProjectComment
+      tags: [Voting]
+      summary: Delete a comment as authorized by the service
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/prizes:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listEventPrizes
+      tags: [Prizes and certificates]
+      summary: List event prizes
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: createPrize
+      tags: [Prizes and certificates]
+      summary: Create a prize
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrizeInput' }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/prizes/{prizeId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: prizeId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: updatePrize
+      tags: [Prizes and certificates]
+      summary: Update a prize
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrizePatch' }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    delete:
+      operationId: deletePrize
+      tags: [Prizes and certificates]
+      summary: Delete a prize
+      responses:
+        '204': { description: Prize deleted }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/certificates:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listCertificates
+      tags: [Prizes and certificates]
+      summary: List issued certificates
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: issueCertificates
+      tags: [Prizes and certificates]
+      summary: Issue certificates for published results
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    delete:
+      operationId: revokeCertificates
+      tags: [Prizes and certificates]
+      summary: Revoke the event's issued certificates
+      description: Requires event configure permission. Returns { revoked } with the number of certificates revoked.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/certificates/{certificateId}:
+    parameters:
+      - { name: certificateId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getCertificate
+      tags: [Prizes and certificates]
+      summary: Read a public certificate
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/exports/{name}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: name, in: path, required: true, description: Export key; an optional .csv suffix is accepted., schema: { type: string } }
+    get:
+      operationId: downloadEventExport
+      tags: [Assets and exports]
+      summary: Download an authorized CSV export
+      responses:
+        '200': { description: CSV file, content: { text/csv: { schema: { type: string } } } }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/bulk/projects:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: exportProjectArchive
+      tags: [Assets and exports]
+      summary: Export an event's projects and revision history
+      description: Organizer-only. JSON is the default format; CSV contains one project per row, with the revision list serialized as JSON in revisions_json. This transfers references to existing same-event teams, tracks, and image assets, not those entities or binary files.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - in: query
+          name: format
+          description: Export format; defaults to json.
+          schema: { type: string, enum: [json, csv], default: json }
+      responses:
+        '200':
+          description: Project archive in the requested format
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectArchive' }
+            text/csv:
+              schema: { type: string, description: CSV with project_id, team_id, slug, state, submitted_at, locked_at, created_at, current_revision_id, and revisions_json columns. }
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: Attachment filename is set for CSV downloads.
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: importProjectArchive
+      tags: [Assets and exports]
+      summary: Import projects and revision history from an archive
+      description: Organizer-only, create-only import, accepted only before judging starts. Imports are rejected in JUDGING, RESULTS_READY, PUBLISHED, and ARCHIVED so rankings and published entrants cannot be changed afterward; there is no restore-mode exception. The request is limited to 10 MiB, 1,000 projects, and 5,000 revisions. Referenced teams, tracks, and image assets must already exist in this event; events, teams, and binary assets are not imported. Existing project IDs cause a conflict. A successful import appends a projects.bulk_import audit event and queues matching webhook deliveries.
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        description: Version 1 archive JSON or the documented project archive CSV format. CSV revisions_json is a JSON-encoded revision array.
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectArchive' }
+          text/csv:
+            schema: { type: string, description: CSV with the project archive header and a JSON revisions_json field. }
+      responses:
+        '201':
+          description: Number of projects created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [imported]
+                properties:
+                  imported: { type: integer, minimum: 0, maximum: 1000 }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-applications/{applicationId}/attachment:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: downloadJudgeApplicationAttachment
+      tags: [Assets and exports]
+      summary: Download an application attachment when authorized
+      responses:
+        '200': { description: Original attachment bytes, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/webhooks:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listEventWebhooks
+      tags: [Webhooks]
+      summary: List webhook endpoints and deliveries
+      description: Organizer-only. Endpoint signing secrets are never returned.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: createEventWebhook
+      tags: [Webhooks]
+      summary: Create a webhook endpoint
+      description: Organizer-only. The generated signing secret is returned once in this response. URLs must be public HTTPS endpoints.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, minLength: 1, maxLength: 2048, format: uri }
+                eventTypes: { type: array, minItems: 1, maxItems: 64, default: ['*'], items: { type: string, minLength: 1, maxLength: 96 } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/webhooks/{endpointId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: endpointId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: updateEventWebhook
+      tags: [Webhooks]
+      summary: Enable, disable, or rotate a webhook endpoint
+      description: Organizer-only. Provide enabled or rotateSecret=true; a rotated secret is returned once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              anyOf:
+                - required: [enabled]
+                - required: [rotateSecret]
+                  properties: { rotateSecret: { const: true } }
+              properties:
+                enabled: { type: boolean }
+                rotateSecret: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    delete:
+      operationId: deleteEventWebhook
+      tags: [Webhooks]
+      summary: Delete a webhook endpoint
+      description: Organizer-only.
+      responses:
+        '200': { description: Deleted endpoint, content: { application/json: { schema: { type: object, required: [deleted], properties: { deleted: { const: true } } } } } }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/webhooks/dispatch:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: dispatchEventWebhooks
+      tags: [Webhooks]
+      summary: Dispatch due webhook deliveries
+      description: Organizer-only. Claims and attempts due deliveries up to the requested limit, with a default of 20 and maximum of 100. Failed deliveries retry with bounded backoff and eventually become dead letters.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                limit: { type: integer, minimum: 1, maximum: 100 }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/health:
+    get:
+      operationId: healthCheck
+      tags: [Operations]
+      summary: Liveness check
+      security: []
+      responses:
+        '200': { description: Process is responding, content: { application/json: { schema: { type: object, required: [status], properties: { status: { const: ok } } } } } }
+  /api/ready:
+    get:
+      operationId: readinessCheck
+      tags: [Operations]
+      summary: Readiness and database migration check
+      security: []
+      responses:
+        '200': { description: Database and migrations are ready, content: { application/json: { schema: { type: object, required: [status, database, migrations], properties: { status: { const: ready }, database: { const: ok }, migrations: { const: applied } } } } } }
+        '503': { description: Database or migrations are unavailable, content: { application/json: { schema: { type: object, required: [status, database], properties: { status: { const: unavailable }, database: { const: unreachable } } } } } }
+
+  /.well-known/dogfood-judge-records.json:
+    get:
+      operationId: getJudgeRecordIssuerKeys
+      tags: [Judging]
+      summary: Published trust anchor for signed judge records
+      description: Public. Returns the issuer origin, the active Ed25519 signing key (SPKI PEM and SHA-256 SPKI fingerprint, or null when signing is not configured), and every trusted signer fingerprint. Verifiers fetch this over HTTPS from the issuer origin (or pin a fingerprint out of band) and check records with scripts/verify-judge-record.ts.
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/auth/sign-out:
+    post:
+      operationId: signOutAccounts
+      tags: [Auth]
+      summary: Revoke one saved account session or all of them
+      description: Revokes sessions server side (unlike logout, which only clears the browser cookie). A token must be the active session or present in the HttpOnly dogfood_accounts list. Updates dogfood_accounts and switches the active session to the next saved account, or clears it.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { oneOf: [ { type: object, required: [token], additionalProperties: false, properties: { token: { type: string, minLength: 1 } } }, { type: object, required: [all], additionalProperties: false, properties: { all: { const: true } } } ] }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/notifications/read:
+    post:
+      operationId: markAllNotificationsRead
+      tags: [Events]
+      summary: Mark all of the caller's notifications read
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/notifications/{notificationId}/read:
+    parameters:
+      - { name: notificationId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: markNotificationRead
+      tags: [Events]
+      summary: Mark one of the caller's notifications read
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-applications:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: getJudgeApplications
+      tags: [Judging]
+      summary: Read the caller's judge application, or all applications for organizers
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: applyAsJudge
+      tags: [Judging]
+      summary: Apply to judge the event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { rationale: { type: string, maxLength: 2000 } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    delete:
+      operationId: withdrawJudgeApplication
+      tags: [Judging]
+      summary: Withdraw the caller's pending judge application
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judge-applications/{applicationId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: decideJudgeApplication
+      tags: [Judging]
+      summary: Approve or reject a judge application
+      description: Requires organizer permission. Approval grants the JUDGE role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [decision], properties: { decision: { type: string, enum: [approve, reject] } } }
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/judges/{userId}:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: deactivateJudge
+      tags: [Judging]
+      summary: Deactivate a judge's event membership
+      description: Requires organizer permission.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/rubrics:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    get:
+      operationId: listRubrics
+      tags: [Judging]
+      summary: List rubric versions and criteria
+      description: Requires organizer permission.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+    post:
+      operationId: createRubric
+      tags: [Judging]
+      summary: Create the next rubric version
+      description: Requires event configure permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 120 } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/rubrics/{rubricId}/criteria:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: rubricId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: addRubricCriterion
+      tags: [Judging]
+      summary: Add a weighted criterion to a rubric
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name, weight, minScore, maxScore], properties: { name: { type: string, minLength: 1, maxLength: 120 }, description: { type: string }, weight: { type: number }, minScore: { type: number }, maxScore: { type: number }, optional: { type: boolean } } }
+      responses:
+        '201': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/rubrics/{rubricId}/activate:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: rubricId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: activateRubric
+      tags: [Judging]
+      summary: Make a rubric version the active one
+      description: Requires event configure permission; criterion weights must be valid.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/evaluations/{assignmentId}/start:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: assignmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: startEvaluation
+      tags: [Judging]
+      summary: Start (or resume) the assigned judge's evaluation
+      description: Only the assigned judge. Idempotent for an evaluation already in progress.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/evaluations/{assignmentId}/reopen:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: assignmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: reopenEvaluation
+      tags: [Judging]
+      summary: Reopen a submitted evaluation for revision
+      description: Only the assigned judge, while judging is open. Returns 409 unless the evaluation is SUBMITTED; locked evaluations cannot be reopened.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/evaluations/{assignmentId}/lock:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: assignmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: lockEvaluation
+      tags: [Judging]
+      summary: Lock one submitted evaluation
+      description: Requires event configure permission. Returns 409 unless the evaluation is SUBMITTED.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/bulk/evaluations/lock:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: lockAllEvaluations
+      tags: [Judging]
+      summary: Lock every submitted evaluation in the event
+      description: Requires event configure permission. In-progress evaluations are left untouched. Returns { locked } with the count.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/bulk/projects/lock:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+    post:
+      operationId: lockAllProjects
+      tags: [Teams and projects]
+      summary: Lock every submitted project after the submission deadline
+      description: Requires event configure permission. Returns { locked } with the count.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /api/v1/events/{eventId}/rankings/{snapshotId}/publish:
+    parameters:
+      - { $ref: '#/components/parameters/eventId' }
+      - { name: snapshotId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: publishRankingSnapshot
+      tags: [Judging]
+      summary: Publish a score-based ranking snapshot
+      description: Requires organizer permission. Moves the event to RESULTS_READY.
+      responses:
+        '200': { $ref: '#/components/responses/JsonObject' }
+        default: { $ref: '#/components/responses/ApiError' }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: dogfood_session
+  parameters:
+    eventId: { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
+  requestBodies:
+    Evaluation:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              scores:
+                type: array
+                maxItems: 200
+                items: { type: object, required: [criterionId, score], properties: { criterionId: { type: string, minLength: 1 }, score: { type: number }, comment: { type: [string, 'null'] } } }
+              overallComment: { type: [string, 'null'], maxLength: 2000 }
+    ApiError:
+      description: Authentication, permission, validation, conflict, or server error.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+  schemas:
+    EventMembership:
+      type: object
+      required: [id, eventId, userId, role, isActive, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        role: { type: string, enum: [ORGANIZER, JUDGE, PARTICIPANT] }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    AddEventMember:
+      type: object
+      required: [email, role]
+      properties:
+        email: { type: string, format: email, maxLength: 320 }
+        role: { type: string, enum: [JUDGE, ORGANIZER] }
+    ChangeEventMemberRole:
+      type: object
+      required: [role]
+      properties:
+        role: { type: string, enum: [ORGANIZER, JUDGE, PARTICIPANT] }
+    AuthUser:
+      type: object
+      required: [id, email, displayName]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        isPlatformAdmin: { type: boolean }
+    AuthUserResponse:
+      type: object
+      required: [user]
+      properties:
+        user: { $ref: '#/components/schemas/AuthUser' }
+    RegisterAccount:
+      type: object
+      required: [email, password, displayName]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        displayName: { type: string, minLength: 1 }
+    LoginAccount:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 1 }
+    SwitchAccount:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, minLength: 1, description: Raw session token from a previously saved dogfood_accounts session; accepted only if present in that cookie. }
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            requestId: { type: string }
+            fields: { type: object, additionalProperties: { type: string } }
+    EventSummary:
+      type: object
+      required: [id, slug, name, description, timezone, state, createdBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        timezone: { type: string }
+        state: { type: string }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+    CreateEvent:
+      type: object
+      required: [slug, name, timezone]
+      properties:
+        slug: { type: string, minLength: 1, maxLength: 64, pattern: '^[a-z0-9-]+$' }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        timezone: { type: string, minLength: 1, maxLength: 64 }
+        registrationOpensAt: { type: [string, 'null'], format: date-time }
+        registrationClosesAt: { type: [string, 'null'], format: date-time }
+        submissionOpensAt: { type: [string, 'null'], format: date-time }
+        submissionClosesAt: { type: [string, 'null'], format: date-time }
+        judgingOpensAt: { type: [string, 'null'], format: date-time }
+        judgingClosesAt: { type: [string, 'null'], format: date-time }
+    UpdateEventDetails:
+      type: object
+      required: [description, websiteUrl, prizeInfo, timeline, schedule, rules, maxTeamSize]
+      properties:
+        description: { type: [string, 'null'], maxLength: 5000 }
+        websiteUrl: { type: [string, 'null'], maxLength: 500 }
+        prizeInfo: { type: [string, 'null'], maxLength: 2000 }
+        timeline: { type: [string, 'null'], maxLength: 2000 }
+        schedule: { type: [string, 'null'], maxLength: 2000 }
+        rules: { type: [string, 'null'], maxLength: 5000 }
+        maxTeamSize: { type: [integer, 'null'], minimum: 2, maximum: 100 }
+    SignedJudgeRecord:
+      type: object
+      required: [id, payload, algorithm, keyFingerprint, publicKey, signature, payloadHash, issuedAt, signatureValid, issuerTrusted]
+      properties:
+        id: { type: string, format: uuid }
+        payload:
+          type: object
+          required: [version, recordId, eventSlug, eventName, judgeDisplayName, lockedEvaluations, firstLockedAt, lastLockedAt]
+          properties:
+            version: { const: dogfood.judge-participation.v1 }
+            recordId: { type: string, format: uuid }
+            eventSlug: { type: string }
+            eventName: { type: string }
+            judgeDisplayName: { type: string }
+            lockedEvaluations: { type: integer, minimum: 1 }
+            firstLockedAt: { type: string, format: date-time }
+            lastLockedAt: { type: string, format: date-time }
+        algorithm: { const: Ed25519 }
+        keyFingerprint: { type: string, pattern: '^[0-9a-f]{64}$', description: SHA-256 fingerprint of the SPKI public key }
+        publicKey: { type: string, description: PEM-encoded Ed25519 SubjectPublicKeyInfo key }
+        signature: { type: string, contentEncoding: base64url, description: Ed25519 signature over the canonical JSON payload }
+        payloadHash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        issuedAt: { type: string, format: date-time }
+        signatureValid: { type: boolean, const: true }
+        issuerTrusted: { type: boolean, description: True only when keyFingerprint matches a deployment trust pin }
+    SignedJudgeRecordRevocationReceipt:
+      type: object
+      required: [payload, payloadHash, algorithm, keyFingerprint, publicKey, signature, revokedAt, signatureValid, issuerTrusted]
+      properties:
+        payload:
+          type: object
+          required: [version, recordId, eventSlug, status, revokedAt]
+          properties:
+            version: { const: dogfood.judge-participation-revocation.v1 }
+            recordId: { type: string, format: uuid }
+            eventSlug: { type: string }
+            status: { const: revoked }
+            revokedAt: { type: string, format: date-time }
+        payloadHash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        algorithm: { const: Ed25519 }
+        keyFingerprint: { type: string, pattern: '^[0-9a-f]{64}$' }
+        publicKey: { type: string, description: PEM-encoded Ed25519 SubjectPublicKeyInfo key }
+        signature: { type: string, contentEncoding: base64url, description: Ed25519 signature over the canonical JSON payload }
+        revokedAt: { type: string, format: date-time }
+        signatureValid: { type: boolean, const: true }
+        issuerTrusted: { type: boolean }
+    PairwiseChoice:
+      type: object
+      required: [winnerProjectId, loserProjectId]
+      properties:
+        winnerProjectId: { type: string, format: uuid }
+        loserProjectId: { type: string, format: uuid }
+    ProjectArchive:
+      type: object
+      required: [format, version, eventId, projects]
+      properties:
+        format: { const: dogfood-projects }
+        version: { const: 1 }
+        eventId: { type: string, format: uuid }
+        projects:
+          type: array
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/ProjectArchiveProject' }
+    ProjectArchiveProject:
+      type: object
+      required: [id, teamId, slug, state, submittedAt, lockedAt, createdAt, currentRevisionId, revisions]
+      properties:
+        id: { type: string, format: uuid }
+        teamId: { type: string, format: uuid }
+        slug: { type: string, minLength: 1, maxLength: 120 }
+        state: { type: string, enum: [DRAFT, SUBMITTED, LOCKED] }
+        submittedAt: { type: [string, 'null'], format: date-time }
+        lockedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        currentRevisionId: { type: string, format: uuid }
+        revisions:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/ProjectArchiveRevision' }
+    ProjectArchiveRevision:
+      type: object
+      required: [id, revisionNumber, createdAt, title, tagline, description, repositoryUrl, liveUrl, demoVideoUrl, thumbnailAssetId, trackId, techTags, customAnswers, questionSnapshot, images]
+      properties:
+        id: { type: string, format: uuid }
+        revisionNumber: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        title: { type: string, maxLength: 120 }
+        tagline: { type: [string, 'null'], maxLength: 280 }
+        description: { type: string, maxLength: 4000 }
+        repositoryUrl: { type: [string, 'null'], format: uri }
+        liveUrl: { type: [string, 'null'], format: uri }
+        demoVideoUrl: { type: [string, 'null'], format: uri }
+        thumbnailAssetId: { type: [string, 'null'], format: uuid }
+        trackId: { type: [string, 'null'], format: uuid }
+        techTags: { type: array, maxItems: 20, items: { type: string, maxLength: 40 } }
+        customAnswers: { type: object, additionalProperties: { type: string, maxLength: 4000 } }
+        questionSnapshot:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            required: [id, prompt, required, visibility, order]
+            properties:
+              id: { type: string, format: uuid }
+              prompt: { type: string, minLength: 1, maxLength: 500 }
+              required: { type: boolean }
+              visibility: { type: string, enum: [PUBLIC, ORGANIZER_ONLY] }
+              order: { type: integer, minimum: 0 }
+        images:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            required: [assetId, position]
+            properties:
+              assetId: { type: string, format: uuid }
+              position: { type: integer, minimum: 0 }
+    CreateProject:
+      type: object
+      required: [teamId]
+      properties:
+        teamId: { type: string }
+        slug: { type: string, maxLength: 64 }
+        title: { type: string, maxLength: 120 }
+        tagline: { type: [string, 'null'], maxLength: 280 }
+        description: { type: string, maxLength: 4000 }
+        repositoryUrl: { type: [string, 'null'], format: uri }
+        liveUrl: { type: [string, 'null'], format: uri }
+        demoVideoUrl: { type: [string, 'null'], format: uri }
+        techTags: { type: array, maxItems: 20, items: { type: string, maxLength: 40 } }
+        trackId: { type: [string, 'null'], format: uuid }
+        thumbnailAssetId: { type: [string, 'null'], format: uuid }
+        imageAssetIds: { type: array, maxItems: 10, items: { type: string, format: uuid } }
+        customAnswers: { type: object, additionalProperties: { type: string, maxLength: 4000 } }
+    PrizeInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: [string, 'null'], maxLength: 1000 }
+        trackId: { type: [string, 'null'], format: uuid }
+        amount: { type: [string, 'null'], maxLength: 32 }
+        currency: { type: [string, 'null'], maxLength: 3 }
+        sortOrder: { type: integer, minimum: 0, maximum: 100000 }
+    PrizePatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: [string, 'null'], maxLength: 1000 }
+        trackId: { type: [string, 'null'], format: uuid }
+        amount: { type: [string, 'null'], maxLength: 32 }
+        currency: { type: [string, 'null'], maxLength: 3 }
+        sortOrder: { type: integer, minimum: 0, maximum: 100000 }
+    AssignmentGeneration:
+      type: object
+      required: [strategy, reviewsPerProject, judgeIds]
+      properties:
+        strategy: { type: string, enum: [round_robin, balanced_by_track] }
+        reviewsPerProject: { type: integer, minimum: 1, maximum: 100 }
+        judgeIds: { type: array, minItems: 1, maxItems: 500, uniqueItems: true, items: { type: string, format: uuid } }
+        trackIds: { type: array, maxItems: 500, items: { type: string, format: uuid } }
+        expectedProposal: { type: array, items: { type: object, required: [judgeId, projectId], properties: { judgeId: { type: string, format: uuid }, projectId: { type: string, format: uuid } } } }
+        commit: { type: boolean, default: false, description: Must be true with expectedProposal to commit the proposal. }
+  responses:
+    JsonObject:
+      description: JSON response object. Exact fields depend on the operation and are defined by the route implementation.
+      content:
+        application/json:
+          schema: { type: object, additionalProperties: true }
+    ApiError:
+      description: Standard API error envelope.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }

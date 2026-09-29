@@ -1,0 +1,20 @@
+{
+    "name":  "@dogfood/events",
+    "private":  true,
+    "version":  "0.1.0",
+    "type":  "module",
+    "exports":  {
+                    ".":  "./src/index.ts"
+                },
+    "scripts":  {
+                    "typecheck":  "tsc --noEmit"
+                },
+    "dependencies":  {
+                         "@dogfood/db":  "workspace:*",
+                         "@dogfood/validation":  "workspace:*",
+                         "@dogfood/shared":  "workspace:*",
+                         "@dogfood/permissions":  "workspace:*",
+                         "@dogfood/audit":  "workspace:*",
+                         "@dogfood/notifications":  "workspace:*"
+                     }
+}
